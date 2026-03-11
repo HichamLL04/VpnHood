@@ -1,0 +1,87 @@
+# ============================================================
+#  VpnHood Server — docker-compose.yml
+#
+#  Quick-start:
+#    1. Copy this file next to the Dockerfile & entrypoint.
+#    2. Edit the environment section below (at minimum set
+#       VH_PUBLIC_ENDPOINTS to your server's public IP:443).
+#    3. Run:  docker compose up -d
+#    4. Generate a first access token:
+#         docker compose exec vpnhood-server \
+#           dotnet /app/VpnHoodServer.dll gen -?
+# ============================================================
+
+services:
+  vpnhood-server:
+    build:
+      context: .          # root of the cloned repo
+      dockerfile: Dockerfile
+    image: vpnhood-server:latest
+    container_name: vpnhood-server
+    restart: unless-stopped
+
+    # The TUN adapter needs NET_ADMIN to create the virtual
+    # network interface inside the container.
+    cap_add:
+      - NET_ADMIN
+    # Allow TUN device access
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    ports:
+      - "443:443/tcp"
+      - "443:443/udp"
+
+    environment:
+      # ── Logging ───────────────────────────────────────────
+      VH_LOG_LEVEL: "Information"          # Trace|Debug|Information|Warning|Error
+
+      # ── Endpoints ─────────────────────────────────────────
+      # Public IP(s) embedded in client access tokens.
+      # Replace with your actual public IP address.
+      VH_PUBLIC_ENDPOINTS: "YOUR_SERVER_PUBLIC_IP:443"
+
+      VH_TCP_ENDPOINTS:    "0.0.0.0:443,[::]:443"
+      VH_UDP_ENDPOINTS:    "0.0.0.0:0,[::]:0"
+
+      # ── Hostname (optional) ───────────────────────────────
+      # Set VH_HOST_NAME and VH_IS_VALID_HOSTNAME=true only if
+      # you have a DNS record pointing to this server.
+      VH_HOST_NAME:           ""
+      VH_IS_VALID_HOSTNAME:   "false"
+
+      # ── Network ───────────────────────────────────────────
+      VH_INCLUDE_LOCAL_NETWORK:         "false"
+      VH_ADD_LISTENER_IPS_TO_NETWORK:   "*"
+
+      # ── TLS certificate password (optional) ───────────────
+      # Only needed if you place a password-protected default.pfx
+      # in the storage volume.
+      VH_SSL_PASSWORD: ""
+
+    volumes:
+      # Persistent storage: access tokens, certificates, logs.
+      # All state lives here — back this up!
+      - vpnhood_storage:/app/storage
+
+      # (Optional) Mount a custom appsettings.json directly:
+      # - ./appsettings.json:/app/storage/appsettings.json:ro
+
+      # (Optional) Mount a TLS certificate:
+      # - ./certs/default.pfx:/app/storage/default.pfx:ro
+
+    # Keep stdin open so the CommandListener (stop/gc) works.
+    stdin_open: true
+    tty: false
+
+    healthcheck:
+      # The server writes a lock file when it is running.
+      test: ["CMD", "test", "-f", "/app/storage/internal/server.lock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  vpnhood_storage:
+    driver: local
