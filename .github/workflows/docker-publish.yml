@@ -1,11 +1,8 @@
 name: Build & Push Docker Image — VpnHood Server
 
 on:
-  # Trigger on every release (stable and pre-release)
   release:
     types: [published]
-
-  # Allow manual runs with optional version override
   workflow_dispatch:
     inputs:
       tag:
@@ -29,7 +26,7 @@ jobs:
 
     permissions:
       contents: read
-      packages: write   # required to push to GHCR
+      packages: write
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────
@@ -40,7 +37,6 @@ jobs:
       - name: Resolve image version
         id: version
         run: |
-          # Priority: manual input > release tag > PubVersion.json
           if [ -n "${{ inputs.tag }}" ]; then
             VERSION="${{ inputs.tag }}"
             echo "Source: manual input"
@@ -52,20 +48,18 @@ jobs:
             echo "Source: PubVersion.json"
           fi
 
-          # Strip leading 'v' if present, then also export bare semver
           VERSION="${VERSION#v}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f1-2)
 
-          echo "VERSION=$VERSION"     >> "$GITHUB_OUTPUT"
-          echo "MAJOR=$MAJOR"         >> "$GITHUB_OUTPUT"
-          echo "MINOR=$MINOR"         >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION"               >> "$GITHUB_OUTPUT"
+          echo "MAJOR=$MAJOR"                   >> "$GITHUB_OUTPUT"
+          echo "MINOR=$MINOR"                   >> "$GITHUB_OUTPUT"
 
-          # Is this a pre-release?
           IS_PRERELEASE="${{ github.event.release.prerelease }}"
           echo "IS_PRERELEASE=${IS_PRERELEASE:-false}" >> "$GITHUB_OUTPUT"
 
-      # ── 3. Set up QEMU (multi-arch builds) ───────────────────
+      # ── 3. Set up QEMU ───────────────────────────────────────
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -88,15 +82,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Full semver:  7.6.783
             type=raw,value=${{ steps.version.outputs.VERSION }}
-            # Minor:        7.6
             type=raw,value=${{ steps.version.outputs.MINOR }}
-            # Major:        7
             type=raw,value=${{ steps.version.outputs.MAJOR }}
-            # "latest" only for stable releases
             type=raw,value=latest,enable=${{ steps.version.outputs.IS_PRERELEASE == 'false' }}
-            # "prerelease" tag for pre-releases
             type=raw,value=prerelease,enable=${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
           labels: |
             org.opencontainers.image.title=VpnHood Server
@@ -106,9 +95,12 @@ jobs:
             org.opencontainers.image.version=${{ steps.version.outputs.VERSION }}
             org.opencontainers.image.licenses=LGPL-2.1-only
 
-      # ── 7. Build (and push) ──────────────────────────────────
+      # ── 7. Build and push ────────────────────────────────────
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v6
+        env:
+          BUILDX_PROGRESS: plain
         with:
           context: .
           file: Dockerfile
@@ -116,14 +108,35 @@ jobs:
           push: ${{ github.event_name == 'release' || inputs.push == true }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Use GitHub Actions cache to speed up subsequent builds
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Build args available in the Dockerfile if needed
           build-args: |
             BUILD_VERSION=${{ steps.version.outputs.VERSION }}
 
-      # ── 8. Summary ───────────────────────────────────────────
+      # ── 8. Full logs on failure ───────────────────────────────
+      - name: Collect build logs on failure
+        if: failure()
+        run: |
+          echo "::group::Re-running linux/amd64 with full output (no cache)"
+          docker buildx build \
+            --platform linux/amd64 \
+            --file Dockerfile \
+            --progress plain \
+            --build-arg BUILD_VERSION=${{ steps.version.outputs.VERSION }} \
+            --no-cache \
+            . 2>&1 | tee /tmp/docker-build-amd64.log || true
+          echo "::endgroup::"
+        continue-on-error: true
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-build-logs-${{ github.run_id }}
+          path: /tmp/docker-build-*.log
+          retention-days: 7
+
+      # ── 9. Summary ───────────────────────────────────────────
       - name: Build summary
         run: |
           echo "## Docker image published 🐳" >> "$GITHUB_STEP_SUMMARY"

@@ -21,15 +21,18 @@ COPY Src/Core/VpnHood.Core.VpnAdapters.Abstractions/VpnHood.Core.VpnAdapters.Abs
                                                                                                   Src/Core/VpnHood.Core.VpnAdapters.Abstractions/
 COPY Src/Core/VpnHood.Core.VpnAdapters.LinuxTun/VpnHood.Core.VpnAdapters.LinuxTun.csproj       Src/Core/VpnHood.Core.VpnAdapters.LinuxTun/
 
-# Restore (cached separately from the full source copy)
-RUN dotnet restore Src/Apps/Server.Net/VpnHood.App.Server.Net.csproj
+# Restore with the target RID so project.assets.json includes linux-x64/linux-arm64
+ARG TARGETARCH
+RUN DOTNET_RID=$([ "$TARGETARCH" = "arm64" ] && echo "linux-arm64" || echo "linux-x64") && \
+    dotnet restore Src/Apps/Server.Net/VpnHood.App.Server.Net.csproj -r $DOTNET_RID
 
 # Copy everything else and publish
 COPY . .
-RUN dotnet publish Src/Apps/Server.Net/VpnHood.App.Server.Net.csproj \
+RUN DOTNET_RID=$([ "$TARGETARCH" = "arm64" ] && echo "linux-arm64" || echo "linux-x64") && \
+    dotnet publish Src/Apps/Server.Net/VpnHood.App.Server.Net.csproj \
         --no-restore \
         -c Release \
-        -r linux-x64 \
+        -r $DOTNET_RID \
         --self-contained false \
         -o /app/publish
 
@@ -74,8 +77,6 @@ ENV VH_HOST_NAME=""
 ENV VH_IS_VALID_HOSTNAME="false"
 # Set to "true" to include the LAN in the VPN route
 ENV VH_INCLUDE_LOCAL_NETWORK="false"
-# Password for default.pfx (leave empty if none)
-ENV VH_SSL_PASSWORD=""
 # Network interface for auto-configuration ("*" = auto-detect)
 ENV VH_ADD_LISTENER_IPS_TO_NETWORK="*"
 
